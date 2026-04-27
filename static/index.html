@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GokulAI — Portfolio Assistant</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+<header class="header">
+  <div class="header-avatar">G</div>
+  <div class="header-info">
+    <h1>GokulAI</h1>
+    <p>Portfolio Assistant · Gokul Prasath S</p>
+  </div>
+  <div class="status-dot" title="Online"></div>
+</header>
+
+<div class="chat-area" id="chat-area"></div>
+
+<div class="input-bar">
+  <textarea id="user-input" rows="1" placeholder="Ask me anything about Gokul…" autocomplete="off"></textarea>
+  <button id="send-btn" title="Send">
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+    </svg>
+  </button>
+</div>
+
+<footer class="footer">
+  Powered by <a href="#">GokulAI</a> · GPT-4o mini + ChromaDB
+</footer>
+
+<script>
+const chatArea = document.getElementById('chat-area');
+const input    = document.getElementById('user-input');
+const sendBtn  = document.getElementById('send-btn');
+
+const history = [];   // [{role, content}]
+let   waiting = false;
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+function now() {
+  return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function scrollBottom() {
+  chatArea.scrollTop = chatArea.scrollHeight;
+}
+
+function appendMsg(role, text, chips = []) {
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar';
+  avatar.textContent = role === 'ai' ? 'G' : 'You';
+
+  const body = document.createElement('div');
+  body.className = 'msg-body';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble';
+  bubble.innerHTML = formatText(text);
+
+  const time = document.createElement('div');
+  time.className = 'msg-time';
+  time.textContent = now();
+
+  body.appendChild(bubble);
+  body.appendChild(time);
+
+  if (chips.length > 0) {
+    body.appendChild(makeChips(chips));
+  }
+
+  div.appendChild(avatar);
+  div.appendChild(body);
+  chatArea.appendChild(div);
+  scrollBottom();
+  return div;
+}
+
+function makeChips(questions) {
+  const row = document.createElement('div');
+  row.className = 'chips-row';
+  questions.forEach(q => {
+    const chip = document.createElement('button');
+    chip.className = 'chip';
+    chip.textContent = q;
+    chip.onclick = () => sendMessage(q);
+    row.appendChild(chip);
+  });
+  return row;
+}
+
+function formatText(text) {
+  // Basic markdown: **bold**, `code`, newlines → <br>
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\n/g, '<br>');
+}
+
+function showTyping() {
+  const div = document.createElement('div');
+  div.className = 'msg ai';
+  div.id = 'typing-msg';
+
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar';
+  avatar.textContent = 'G';
+
+  const body = document.createElement('div');
+  body.className = 'msg-body';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble';
+  bubble.innerHTML = '<div class="typing-indicator"><span></span><span></span><span></span></div>';
+
+  body.appendChild(bubble);
+  div.appendChild(avatar);
+  div.appendChild(body);
+  chatArea.appendChild(div);
+  scrollBottom();
+}
+
+function removeTyping() {
+  const el = document.getElementById('typing-msg');
+  if (el) el.remove();
+}
+
+function setWaiting(val) {
+  waiting = val;
+  sendBtn.disabled = val;
+  input.disabled = val;
+}
+
+// ── API calls ──────────────────────────────────────────────────────────────
+
+async function fetchSuggest() {
+  try {
+    const res = await fetch('/suggest');
+    return await res.json();
+  } catch {
+    return [];
+  }
+}
+
+async function fetchChat(message) {
+  const res = await fetch('/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, history }),
+  });
+  if (!res.ok) throw new Error(`Server error ${res.status}`);
+  return await res.json();
+}
+
+// ── Send flow ──────────────────────────────────────────────────────────────
+
+async function sendMessage(message) {
+  if (!message.trim() || waiting) return;
+
+  // Clear input
+  input.value = '';
+  input.style.height = 'auto';
+
+  appendMsg('user', message);
+  history.push({ role: 'user', content: message });
+
+  setWaiting(true);
+  showTyping();
+
+  try {
+    const data = await fetchChat(message);
+    removeTyping();
+
+    appendMsg('ai', data.answer, data.suggested_questions || []);
+    history.push({ role: 'assistant', content: data.answer });
+  } catch (err) {
+    removeTyping();
+    appendMsg('ai', 'Sorry, something went wrong. Please try again.');
+    console.error(err);
+  } finally {
+    setWaiting(false);
+    input.focus();
+  }
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+
+async function init() {
+  const starters = await fetchSuggest();
+
+  // Starter message
+  const introDiv = document.createElement('div');
+  introDiv.className = 'msg ai';
+
+  const av = document.createElement('div');
+  av.className = 'msg-avatar';
+  av.textContent = 'G';
+
+  const body = document.createElement('div');
+  body.className = 'msg-body';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble';
+  bubble.innerHTML = formatText(
+    "Hi! I'm GokulAI — ask me anything about Gokul's projects, skills, or availability.\nOr pick a topic below 👇"
+  );
+
+  const time = document.createElement('div');
+  time.className = 'msg-time';
+  time.textContent = now();
+
+  body.appendChild(bubble);
+  body.appendChild(time);
+
+  if (starters.length > 0) {
+    body.appendChild(makeChips(starters));
+  }
+
+  introDiv.appendChild(av);
+  introDiv.appendChild(body);
+  chatArea.appendChild(introDiv);
+}
+
+// ── Event listeners ────────────────────────────────────────────────────────
+
+sendBtn.addEventListener('click', () => sendMessage(input.value));
+
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendMessage(input.value);
+  }
+});
+
+// Auto-resize textarea
+input.addEventListener('input', () => {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+});
+
+init();
+</script>
+</body>
+</html>
